@@ -38,7 +38,7 @@ router.get('/:id', async (req: Request, res: Response) => {
             res.send(object.Body);
         } else if (mimetype === 'image') {
             if (file.showLink) return res.render('file', {
-                url: `https://cdn.astral.cool/${file.uploader.uid}/${id}`,
+                url: `https://cdn.astral.cool/${file.uploader.uid}/${file.filename}`,
                 uploader: file.uploader.username,
                 date: file.dateUploaded,
             });
