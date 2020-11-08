@@ -37,6 +37,13 @@ router.get('/:id', async (req: Request, res: Response) => {
             res.set('Content-Type', object.ContentType);
             res.send(object.Body);
         } else if (mimetype === 'image') {
+            if (file.displayType === 'embed') return res.render('embedFile', {
+                url: `https://cdn.astral.cool/${file.uploader.uid}/${file.filename}`,
+                uploader: file.uploader.username,
+                date: file.dateUploaded,
+                embed: file.embed,
+            });
+
             if (file.showLink) return res.render('file', {
                 url: `https://cdn.astral.cool/${file.uploader.uid}/${file.filename}`,
                 uploader: file.uploader.username,
