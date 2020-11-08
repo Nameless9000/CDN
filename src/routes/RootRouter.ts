@@ -41,7 +41,11 @@ router.get('/:id', async (req: Request, res: Response) => {
                 url: `https://cdn.astral.cool/${file.uploader.uid}/${file.filename}`,
                 uploader: file.uploader.username,
                 date: file.dateUploaded,
-                embed: file.embed,
+                embed: {
+                    title: file.embed.title === 'filename' ? file.filename : file.embed.title,
+                    description: file.embed.description === 'info' ? `File uploaded by ${file.uploader.username} on ${file.dateUploaded}.` : file.embed.description,
+                    color: file.embed.color,
+                },
             });
 
             if (file.showLink) return res.render('file', {
