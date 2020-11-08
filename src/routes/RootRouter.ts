@@ -43,7 +43,7 @@ router.get('/:id', async (req: Request, res: Response) => {
                 date: file.dateUploaded,
                 embed: {
                     title: file.embed.title === 'default' ? file.filename : file.embed.title,
-                    description: file.embed.description === 'default' ? `File uploaded by ${file.uploader.username} on ${file.dateUploaded}.` : file.embed.description,
+                    description: file.embed.description === 'default' ? `Uploaded by ${file.uploader.username} on ${file.dateUploaded}.` : file.embed.description,
                     color: file.embed.color,
                 },
             });
