@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 
 	"github.com/aws/aws-sdk-go/service/s3"
 
@@ -21,16 +24,17 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var (
-	collection   *mongo.Collection
-	mongoContext = context.TODO()
-)
-
 // Response The response we send back as json.
 type Response struct {
 	Success bool
 	Error   string
 }
+
+var (
+	collection   *mongo.Collection
+	mongoContext = context.TODO()
+	svc          *s3.S3
+)
 
 func main() {
 	err := godotenv.Load()
@@ -63,11 +67,31 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		path = path[1:]
 		var file bson.M
 		if err := collection.FindOne(mongoContext, bson.M{"filename": path}).Decode(&file); err != nil {
-			sendErr(ctx, "Invalid File")
+			sendErr(ctx, "invalid file")
 			ctx.Done()
 			return
 		}
-		fmt.Fprintln(ctx, file)
+
+		uploaderID := file["uploader"].(primitive.M)["uid"]
+		resp, err := svc.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(os.Getenv("S3_BUCKET_NAME")),
+			Key:    aws.String(uploaderID.(string) + "/" + path),
+		})
+		if err != nil {
+			sendErr(ctx, err.Error())
+			ctx.Done()
+			return
+		}
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			sendErr(ctx, "something went wrong")
+			ctx.Done()
+			return
+		}
+
+		ctx.SetBody(body)
+		ctx.Done()
 	}
 }
 
@@ -86,7 +110,7 @@ func connectToS3() {
 		log.Fatal(err)
 	}
 
-	svc := s3.New(sess, &aws.Config{
+	svc = s3.New(sess, &aws.Config{
 		Endpoint: aws.String(os.Getenv("S3_ENDPOINT")),
 	})
 }
