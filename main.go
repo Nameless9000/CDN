@@ -7,6 +7,12 @@ import (
 	"log"
 	"os"
 
+	"github.com/aws/aws-sdk-go/service/s3"
+
+	"github.com/aws/aws-sdk-go/aws"
+
+	"github.com/aws/aws-sdk-go/aws/session"
+
 	"github.com/valyala/fasthttp"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -36,6 +42,7 @@ func main() {
 	mongoURL := os.Getenv("MONGO_URI")
 
 	connectToDatabase(mongoURL)
+	connectToS3()
 
 	handler := fasthttp.CompressHandler(requestHandler)
 
@@ -69,6 +76,19 @@ func sendErr(ctx *fasthttp.RequestCtx, errMsg string) {
 	if err := json.NewEncoder(ctx).Encode(Response{Success: false, Error: errMsg}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func connectToS3() {
+	sess, err := session.NewSession(&aws.Config{
+		Region: aws.String("us-west-2"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	svc := s3.New(sess, &aws.Config{
+		Endpoint: aws.String(os.Getenv("S3_ENDPOINT")),
+	})
 }
 
 func connectToDatabase(mongoURL string) {
