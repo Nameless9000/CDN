@@ -25,7 +25,6 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Response The request response
 type Response struct {
 	Success bool
 	Error   string
@@ -33,8 +32,34 @@ type Response struct {
 
 var (
 	collection   *mongo.Collection
+	invisibleURL *mongo.Collection
 	mongoContext = context.TODO()
 	svc          *s3.S3
+)
+
+const (
+	embedTemplate = `<html>
+		<head>
+			<meta property="og:image" content="%s" />
+			<meta property="og:title" content="%s" />
+			<meta property="og:description" content="%s" />
+			<meta name="theme-color" content="%s" />
+			<meta name="twitter:card" content="summary_large_image" />
+		</head>
+
+		<h1>Image uploaded by %s on %s.</h1>
+		<img src="%s" />
+	</html>`
+
+	showLinkTemplate = `<html>
+		<head>
+			<meta property="og:image" content="%s" />
+			<meta name="twitter:card" content="summary_large_image" />
+		</head>
+
+		<h1>Image uploaded by %s on %s.</h1>
+		<img src="%s" />
+	</html>`
 )
 
 func main() {
@@ -67,10 +92,20 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 	case path != "/" && path != "favicon.ico":
 		path = path[1:]
 		var file bson.M
-		if err := collection.FindOne(mongoContext, bson.M{"filename": path}).Decode(&file); err != nil {
-			sendErr(ctx, "invalid file")
-			ctx.Done()
-			return
+		var invisURL bson.M
+		if err := invisibleURL.FindOne(mongoContext, bson.M{"_id": path}).Decode(&invisURL); err != nil {
+			if err := collection.FindOne(mongoContext, bson.M{"filename": path}).Decode(&file); err != nil {
+				sendErr(ctx, "shorturl doesn't exist and neither does the file")
+				ctx.Done()
+				return
+			}
+		}
+		if invisURL != nil {
+			if err := collection.FindOne(mongoContext, bson.M{"filename": invisURL["filename"]}).Decode(&file); err != nil {
+				sendErr(ctx, "invalid file")
+				ctx.Done()
+				return
+			}
 		}
 
 		mimetype := strings.SplitN(file["mimetype"].(string), "/", 2)[0]
@@ -79,7 +114,7 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		uploaderUsername := file["uploader"].(primitive.M)["username"].(string)
 		resp, err := svc.GetObject(&s3.GetObjectInput{
 			Bucket: aws.String(os.Getenv("S3_BUCKET_NAME")),
-			Key:    aws.String(uploaderID + "/" + path),
+			Key:    aws.String(uploaderID + "/" + file["filename"].(string)),
 		})
 		if err != nil {
 			sendErr(ctx, err.Error())
@@ -99,51 +134,31 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 			ctx.SetBody(body)
 			ctx.Done()
 		} else if mimetype == "image" {
-			imageURL := "https://cdn.astral.cool/" + uploaderID + "/" + path
+			imageURL := "https://cdn.astral.cool/" + uploaderID + "/" + file["filename"].(string)
 			if file["displayType"] == "embed" {
 				ctx.SetContentType("text/html")
 
-				template := `<html>
-					<head>
-						<meta property="og:image" content="%s" />
-						<meta property="og:title" content="%s" />
-						<meta property="og:description" content="%s" />
-						<meta name="theme-color" content="%s" />
-						<meta name="twitter:card" content="summary_large_image" />
-					</head>
-	
-					<h1>Image uploaded by %s on %s.</h1>
-					<img src="%s" />
-				</html>`
-
-				title := "default"
+				title := file["filename"].(string)
 				if file["embed"].(primitive.M)["title"] != "default" {
 					title = file["embed"].(primitive.M)["title"].(string)
 				}
-				description := "default"
-				if file["embed"].(primitive.M)["title"] != "default" {
-					title = file["embed"].(primitive.M)["title"].(string)
+				description := "Uploaded by " + uploaderUsername + " on " + file["dateUploaded"].(string)
+				if file["embed"].(primitive.M)["description"] != "default" {
+					description = file["embed"].(primitive.M)["description"].(string)
 				}
+				color := file["embed"].(primitive.M)["color"]
 
-				formatted := fmt.Sprintf(template, imageURL, title)
+				formatted := fmt.Sprintf(embedTemplate, imageURL, title, description, color, uploaderUsername, file["dateUploaded"], imageURL)
 				fmt.Fprintln(ctx, formatted)
 			} else if file["showLink"] == true {
 				ctx.SetContentType("text/html")
 
-				template := `<html>
-					<head>
-						<meta property="og:image" content="%s" />
-						<meta name="twitter:card" content="summary_large_image" />
-					</head>
-	
-					<h1>Image uploaded by %s on %s.</h1>
-					<img src="%s" />
-				</html>`
-
-				formatted := fmt.Sprintf(template, imageURL, uploaderUsername, file["dateUploaded"], imageURL)
+				formatted := fmt.Sprintf(showLinkTemplate, imageURL, uploaderUsername, file["dateUploaded"], imageURL)
 				fmt.Fprintln(ctx, formatted)
 			} else {
-
+				ctx.SetContentType(deref(resp.ContentType))
+				ctx.SetBody(body)
+				ctx.Done()
 			}
 		} else {
 			sendErr(ctx, "invalid mimetype")
@@ -178,6 +193,7 @@ func connectToDatabase(mongoURL string) {
 		log.Fatal(err)
 	}
 	collection = client.Database("astral").Collection("files")
+	invisibleURL = client.Database("astral").Collection("invisibleurls")
 
 	defer fmt.Println("connected to database")
 }
