@@ -95,7 +95,7 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		var invisURL bson.M
 		if err := invisibleURL.FindOne(mongoContext, bson.M{"_id": path}).Decode(&invisURL); err != nil {
 			if err := collection.FindOne(mongoContext, bson.M{"filename": path}).Decode(&file); err != nil {
-				sendErr(ctx, "shorturl doesn't exist and neither does the file")
+				sendErr(ctx, "no invisible url or file was found")
 				ctx.Done()
 				return
 			}
