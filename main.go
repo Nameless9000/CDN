@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
@@ -24,7 +25,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// Response The response we send back as json.
+// Response The request response
 type Response struct {
 	Success bool
 	Error   string
@@ -72,10 +73,13 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 			return
 		}
 
-		uploaderID := file["uploader"].(primitive.M)["uid"]
+		mimetype := strings.SplitN(file["mimetype"].(string), "/", 2)[0]
+
+		uploaderID := file["uploader"].(primitive.M)["uid"].(string)
+		uploaderUsername := file["uploader"].(primitive.M)["username"].(string)
 		resp, err := svc.GetObject(&s3.GetObjectInput{
 			Bucket: aws.String(os.Getenv("S3_BUCKET_NAME")),
-			Key:    aws.String(uploaderID.(string) + "/" + path),
+			Key:    aws.String(uploaderID + "/" + path),
 		})
 		if err != nil {
 			sendErr(ctx, err.Error())
@@ -90,8 +94,61 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 			return
 		}
 
-		ctx.SetBody(body)
-		ctx.Done()
+		if mimetype == "video" {
+			ctx.SetContentType(deref(resp.ContentType))
+			ctx.SetBody(body)
+			ctx.Done()
+		} else if mimetype == "image" {
+			imageURL := "https://cdn.astral.cool/" + uploaderID + "/" + path
+			if file["displayType"] == "embed" {
+				ctx.SetContentType("text/html")
+
+				template := `<html>
+					<head>
+						<meta property="og:image" content="%s" />
+						<meta property="og:title" content="%s" />
+						<meta property="og:description" content="%s" />
+						<meta name="theme-color" content="%s" />
+						<meta name="twitter:card" content="summary_large_image" />
+					</head>
+	
+					<h1>Image uploaded by %s on %s.</h1>
+					<img src="%s" />
+				</html>`
+
+				title := "default"
+				if file["embed"].(primitive.M)["title"] != "default" {
+					title = file["embed"].(primitive.M)["title"].(string)
+				}
+				description := "default"
+				if file["embed"].(primitive.M)["title"] != "default" {
+					title = file["embed"].(primitive.M)["title"].(string)
+				}
+
+				formatted := fmt.Sprintf(template, imageURL, title)
+				fmt.Fprintln(ctx, formatted)
+			} else if file["showLink"] == true {
+				ctx.SetContentType("text/html")
+
+				template := `<html>
+					<head>
+						<meta property="og:image" content="%s" />
+						<meta name="twitter:card" content="summary_large_image" />
+					</head>
+	
+					<h1>Image uploaded by %s on %s.</h1>
+					<img src="%s" />
+				</html>`
+
+				formatted := fmt.Sprintf(template, imageURL, uploaderUsername, file["dateUploaded"], imageURL)
+				fmt.Fprintln(ctx, formatted)
+			} else {
+
+			}
+		} else {
+			sendErr(ctx, "invalid mimetype")
+			ctx.Done()
+		}
 	}
 }
 
@@ -123,4 +180,12 @@ func connectToDatabase(mongoURL string) {
 	collection = client.Database("astral").Collection("files")
 
 	defer fmt.Println("connected to database")
+}
+
+func deref(str *string) string {
+	if str != nil {
+		return *str
+	}
+
+	return ""
 }
