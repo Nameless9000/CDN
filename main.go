@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io/ioutil"
 	"log"
 	"os"
@@ -40,25 +41,25 @@ var (
 const (
 	embedTemplate = `<html>
 		<head>
-			<meta property="og:image" content="%s" />
-			<meta property="og:title" content="%s" />
-			<meta property="og:description" content="%s" />
-			<meta name="theme-color" content="%s" />
+			<meta property="og:image" content="{{.ImageURL}}" />
+			<meta property="og:title" content="{{.Title}}" />
+			<meta property="og:description" content="{{.Desc}}" />
+			<meta name="theme-color" content="{{.Color}}" />
 			<meta name="twitter:card" content="summary_large_image" />
 		</head>
 
-		<h1>Image uploaded by %s on %s.</h1>
-		<img src="%s" />
+		<h1>Image uploaded by {{.Uploader}} on {{.Date}}.</h1>
+		<img src="{{.ImageURL}}" />
 	</html>`
 
 	showLinkTemplate = `<html>
 		<head>
-			<meta property="og:image" content="%s" />
+			<meta property="og:image" content="{{.ImageURL}}" />
 			<meta name="twitter:card" content="summary_large_image" />
 		</head>
 
-		<h1>Image uploaded by %s on %s.</h1>
-		<img src="%s" />
+		<h1>Image uploaded by {{.Uploader}} on {{.Date}}.</h1>
+		<img src="{{.ImageURL}}" />
 	</html>`
 )
 
@@ -146,15 +147,61 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 				if file["embed"].(primitive.M)["description"] != "default" {
 					description = file["embed"].(primitive.M)["description"].(string)
 				}
-				color := file["embed"].(primitive.M)["color"]
+				color := file["embed"].(primitive.M)["color"].(string)
 
-				formatted := fmt.Sprintf(embedTemplate, imageURL, title, description, color, uploaderUsername, file["dateUploaded"], imageURL)
-				fmt.Fprintln(ctx, formatted)
+				t, err := template.New("embed").Parse(embedTemplate)
+				if err != nil {
+					sendErr(ctx, "something went wrong")
+					ctx.Done()
+					return
+				}
+
+				data := struct {
+					ImageURL string
+					Title    string
+					Desc     string
+					Color    string
+					Uploader string
+					Date     string
+				}{
+					ImageURL: imageURL,
+					Title:    title,
+					Desc:     description,
+					Color:    color,
+					Uploader: uploaderUsername,
+					Date:     file["dateUploaded"].(string),
+				}
+
+				err = t.Execute(ctx, data)
+				if err != nil {
+					sendErr(ctx, "something went wrong")
+					ctx.Done()
+				}
 			} else if file["showLink"] == true {
 				ctx.SetContentType("text/html")
 
-				formatted := fmt.Sprintf(showLinkTemplate, imageURL, uploaderUsername, file["dateUploaded"], imageURL)
-				fmt.Fprintln(ctx, formatted)
+				t, err := template.New("showlink").Parse(showLinkTemplate)
+				if err != nil {
+					sendErr(ctx, "something went wrong")
+					ctx.Done()
+					return
+				}
+
+				data := struct {
+					ImageURL string
+					Uploader string
+					Date     string
+				}{
+					ImageURL: imageURL,
+					Uploader: uploaderUsername,
+					Date:     file["dateUploaded"].(string),
+				}
+
+				err = t.Execute(ctx, data)
+				if err != nil {
+					sendErr(ctx, "something went wrong")
+					ctx.Done()
+				}
 			} else {
 				ctx.SetContentType(deref(resp.ContentType))
 				ctx.SetBody(body)
