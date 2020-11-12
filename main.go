@@ -146,14 +146,14 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 				title := file["filename"].(string)
 				if file["embed"].(primitive.M)["title"] != "default" {
 					title = strings.ReplaceAll(embedTitle, "{username}", uploaderUsername)
-					title = strings.ReplaceAll(embedTitle, "{date}", dateUploaded)
-					title = strings.ReplaceAll(embedTitle, "{file}", file["filename"].(string))
+					title = strings.ReplaceAll(title, "{date}", dateUploaded)
+					title = strings.ReplaceAll(title, "{file}", file["filename"].(string))
 				}
 				description := "Uploaded by " + uploaderUsername + " on " + dateUploaded
 				if file["embed"].(primitive.M)["description"] != "default" {
 					description = strings.ReplaceAll(embedDescription, "{username}", uploaderUsername)
-					description = strings.ReplaceAll(embedDescription, "{date}", dateUploaded)
-					description = strings.ReplaceAll(embedDescription, "{file}", file["filename"].(string))
+					description = strings.ReplaceAll(description, "{date}", dateUploaded)
+					description = strings.ReplaceAll(description, "{file}", file["filename"].(string))
 				}
 				color := file["embed"].(primitive.M)["color"].(string)
 
