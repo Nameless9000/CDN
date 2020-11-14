@@ -31,6 +31,13 @@ type Response struct {
 	Error   string
 }
 
+type OEmbedResponse struct {
+	Version string `json:"version"`
+	Type    string `json:"type"`
+	Title   string `json:"title"`
+	Author  string `json:"author_name"`
+}
+
 var (
 	collection   *mongo.Collection
 	invisibleURL *mongo.Collection
@@ -42,10 +49,10 @@ const (
 	embedTemplate = `<html>
 		<head>
 			<meta property="og:image" content="{{.ImageURL}}" />
-			<meta property="og:title" content="{{.Title}}" />
 			<meta property="og:description" content="{{.Desc}}" />
 			<meta name="theme-color" content="{{.Color}}" />
 			<meta name="twitter:card" content="summary_large_image" />
+			<link type="application/json+oembed" href="{{.OEmbedURL}}" />
 		</head>
 
 		<h1>Image uploaded by {{.Uploader}} on {{.Date}}.</h1>
@@ -90,6 +97,40 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 	switch {
 	case path == "/":
 		ctx.Redirect("https://astral.cool", 301)
+	case strings.HasPrefix(path, "/oembed/"):
+		path = strings.SplitN(path[1:], "/", 2)[1]
+		var file bson.M
+		if err := collection.FindOne(mongoContext, bson.M{"filename": path}).Decode(&file); err != nil {
+			sendErr(ctx, "invalid file")
+			ctx.Done()
+			return
+		}
+
+		embedTitle := file["embed"].(primitive.M)["title"].(string)
+		uploaderUsername := file["uploader"].(primitive.M)["username"].(string)
+		dateUploaded := file["dateUploaded"].(string)
+
+		author := ""
+		if file["embed"].(primitive.M)["author"] == true {
+			author = uploaderUsername
+		}
+
+		title := file["filename"].(string)
+		if file["embed"].(primitive.M)["title"] != "default" {
+			title = strings.ReplaceAll(embedTitle, "{username}", uploaderUsername)
+			title = strings.ReplaceAll(title, "{date}", dateUploaded)
+			title = strings.ReplaceAll(title, "{file}", file["filename"].(string))
+		}
+
+		ctx.Response.Header.SetCanonical([]byte("Content-Type"), []byte("application/json"))
+		if err := json.NewEncoder(ctx).Encode(OEmbedResponse{
+			Type:    "link",
+			Version: "1.0",
+			Title:   title,
+			Author:  author,
+		}); err != nil {
+			log.Fatal(err)
+		}
 	case path != "/" && path != "favicon.ico":
 		path = path[1:]
 		var file bson.M
@@ -139,16 +180,9 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 			if file["displayType"] == "embed" {
 				ctx.SetContentType("text/html")
 
-				embedTitle := file["embed"].(primitive.M)["title"].(string)
 				embedDescription := file["embed"].(primitive.M)["description"].(string)
 				dateUploaded := file["dateUploaded"].(string)
 
-				title := file["filename"].(string)
-				if file["embed"].(primitive.M)["title"] != "default" {
-					title = strings.ReplaceAll(embedTitle, "{username}", uploaderUsername)
-					title = strings.ReplaceAll(title, "{date}", dateUploaded)
-					title = strings.ReplaceAll(title, "{file}", file["filename"].(string))
-				}
 				description := "Uploaded by " + uploaderUsername + " on " + dateUploaded
 				if file["embed"].(primitive.M)["description"] != "default" {
 					description = strings.ReplaceAll(embedDescription, "{username}", uploaderUsername)
@@ -165,19 +199,19 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 				}
 
 				data := struct {
-					ImageURL string
-					Title    string
-					Desc     string
-					Color    string
-					Uploader string
-					Date     string
+					ImageURL  string
+					OEmbedURL string
+					Desc      string
+					Color     string
+					Uploader  string
+					Date      string
 				}{
-					ImageURL: imageURL,
-					Title:    title,
-					Desc:     description,
-					Color:    color,
-					Uploader: uploaderUsername,
-					Date:     dateUploaded,
+					ImageURL:  imageURL,
+					OEmbedURL: os.Getenv("CDN_URL") + "/oembed/" + file["filename"].(string),
+					Desc:      description,
+					Color:     color,
+					Uploader:  uploaderUsername,
+					Date:      dateUploaded,
 				}
 
 				err = t.Execute(ctx, data)
