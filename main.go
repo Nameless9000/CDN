@@ -7,8 +7,10 @@ import (
 	"html/template"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"os"
 	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
 
@@ -190,6 +192,9 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 					description = strings.ReplaceAll(description, "{file}", file["filename"].(string))
 				}
 				color := file["embed"].(primitive.M)["color"].(string)
+				if file["embed"].(primitive.M)["randomColor"] == true {
+					color = generateColor()
+				}
 
 				t, err := template.New("embed").Parse(embedTemplate)
 				if err != nil {
@@ -293,4 +298,12 @@ func deref(str *string) string {
 	}
 
 	return ""
+}
+
+func generateColor() string {
+	rand.Seed(time.Now().UnixNano())
+	Blue := rand.Intn(255)
+	Green := rand.Intn(255)
+	Red := rand.Intn(255)
+	return "#" + fmt.Sprintf("%x", Red) + fmt.Sprintf("%x", Green) + fmt.Sprintf("%x", Blue)
 }
