@@ -50,25 +50,34 @@ var (
 const (
 	embedTemplate = `<html>
 		<head>
-			<meta property="og:image" content="{{.ImageURL}}" />
-			<meta property="og:description" content="{{.Desc}}" />
-			<meta name="theme-color" content="{{.Color}}" />
+			{{ if .Image }}
 			<meta name="twitter:card" content="summary_large_image" />
+			<meta property="og:image" content="{{.FileURL}}" />
+			<meta property="og:description" content="{{.Desc}}" />
+			{{ else }}
+			<meta name="twitter:card" content="player" />
+			<meta name="twitter:player" content="{{ .FileURL }}">
+			{{ end }}
+			<meta name="theme-color" content="{{.Color}}" />
 			<link type="application/json+oembed" href="{{.OEmbedURL}}" />
 		</head>
 
 		<h1>Image uploaded by {{.Uploader}} on {{.Date}}.</h1>
-		<img src="{{.ImageURL}}" />
+		{{ if .Image }}
+		<img src="{{.FileURL}}" />
+		{{ else }}
+		<embed src="{{ .FileURL }}" />
+		{{ end }}
 	</html>`
 
 	showLinkTemplate = `<html>
 		<head>
-			<meta property="og:image" content="{{.ImageURL}}" />
+			<meta property="og:image" content="{{.FileURL}}" />
 			<meta name="twitter:card" content="summary_large_image" />
 		</head>
 
 		<h1>Image uploaded by {{.Uploader}} on {{.Date}}.</h1>
-		<img src="{{.ImageURL}}" />
+		<img src="{{.FileURL}}" />
 	</html>`
 )
 
@@ -173,59 +182,63 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 			return
 		}
 
-		if mimetype == "video" {
-			ctx.SetContentType(deref(resp.ContentType))
-			ctx.SetBody(body)
-			ctx.Done()
-		} else if mimetype == "image" {
-			imageURL := "https://cdn.astral.cool/" + uploaderID + "/" + file["filename"].(string)
-			if file["displayType"] == "embed" {
+		fileURL := "https://cdn.astral.cool/" + uploaderID + "/" + file["filename"].(string)
+		if file["displayType"] == "embed" {
+			ctx.SetContentType("text/html")
+
+			embedDescription := file["embed"].(primitive.M)["description"].(string)
+			dateUploaded := file["dateUploaded"].(string)
+
+			description := "Uploaded by " + uploaderUsername + " on " + dateUploaded
+			if file["embed"].(primitive.M)["description"] != "default" {
+				description = strings.ReplaceAll(embedDescription, "{username}", uploaderUsername)
+				description = strings.ReplaceAll(description, "{date}", dateUploaded)
+				description = strings.ReplaceAll(description, "{file}", file["filename"].(string))
+			}
+			color := file["embed"].(primitive.M)["color"].(string)
+			if file["embed"].(primitive.M)["randomColor"] == true {
+				color = generateColor()
+			}
+
+			t, err := template.New("embed").Parse(embedTemplate)
+			if err != nil {
+				sendErr(ctx, "something went wrong")
+				ctx.Done()
+				return
+			}
+
+			data := struct {
+				FileURL   string
+				OEmbedURL string
+				Desc      string
+				Color     string
+				Uploader  string
+				Date      string
+				Image     bool
+			}{
+				FileURL:   fileURL,
+				OEmbedURL: os.Getenv("CDN_URL") + "/oembed/" + file["filename"].(string),
+				Desc:      description,
+				Color:     color,
+				Uploader:  uploaderUsername,
+				Date:      dateUploaded,
+				Image:     mimetype == "image",
+			}
+
+			err = t.Execute(ctx, data)
+			if err != nil {
+				sendErr(ctx, "something went wrong")
+				ctx.Done()
+			}
+		} else if file["showLink"] == true {
+			if mimetype == "video" {
+				ctx.SetContentType(deref(resp.ContentType))
+				ctx.SetBody(body)
+				ctx.Done()
+			} else if mimetype == "image" {
 				ctx.SetContentType("text/html")
 
-				embedDescription := file["embed"].(primitive.M)["description"].(string)
 				dateUploaded := file["dateUploaded"].(string)
-
-				description := "Uploaded by " + uploaderUsername + " on " + dateUploaded
-				if file["embed"].(primitive.M)["description"] != "default" {
-					description = strings.ReplaceAll(embedDescription, "{username}", uploaderUsername)
-					description = strings.ReplaceAll(description, "{date}", dateUploaded)
-					description = strings.ReplaceAll(description, "{file}", file["filename"].(string))
-				}
-				color := file["embed"].(primitive.M)["color"].(string)
-				if file["embed"].(primitive.M)["randomColor"] == true {
-					color = generateColor()
-				}
-
-				t, err := template.New("embed").Parse(embedTemplate)
-				if err != nil {
-					sendErr(ctx, "something went wrong")
-					ctx.Done()
-					return
-				}
-
-				data := struct {
-					ImageURL  string
-					OEmbedURL string
-					Desc      string
-					Color     string
-					Uploader  string
-					Date      string
-				}{
-					ImageURL:  imageURL,
-					OEmbedURL: os.Getenv("CDN_URL") + "/oembed/" + file["filename"].(string),
-					Desc:      description,
-					Color:     color,
-					Uploader:  uploaderUsername,
-					Date:      dateUploaded,
-				}
-
-				err = t.Execute(ctx, data)
-				if err != nil {
-					sendErr(ctx, "something went wrong")
-					ctx.Done()
-				}
-			} else if file["showLink"] == true {
-				ctx.SetContentType("text/html")
 
 				t, err := template.New("showlink").Parse(showLinkTemplate)
 				if err != nil {
@@ -235,13 +248,13 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 				}
 
 				data := struct {
-					ImageURL string
+					FileURL  string
 					Uploader string
 					Date     string
 				}{
-					ImageURL: imageURL,
+					FileURL:  fileURL,
 					Uploader: uploaderUsername,
-					Date:     file["dateUploaded"].(string),
+					Date:     dateUploaded,
 				}
 
 				err = t.Execute(ctx, data)
@@ -250,12 +263,12 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 					ctx.Done()
 				}
 			} else {
-				ctx.SetContentType(deref(resp.ContentType))
-				ctx.SetBody(body)
+				sendErr(ctx, "invalid mimetype")
 				ctx.Done()
 			}
 		} else {
-			sendErr(ctx, "invalid mimetype")
+			ctx.SetContentType(deref(resp.ContentType))
+			ctx.SetBody(body)
 			ctx.Done()
 		}
 	}
