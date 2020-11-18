@@ -48,7 +48,7 @@ var (
 )
 
 const (
-	embedTemplate = `<html>
+	embedTemplate = `<html style="background: #181818;">
 		<head>
 			{{ if .Image }}
 			<meta name="twitter:card" content="summary_large_image" />
@@ -62,22 +62,26 @@ const (
 			<link type="application/json+oembed" href="{{.OEmbedURL}}" />
 		</head>
 
-		<h1>Image uploaded by {{.Uploader}} on {{.Date}}.</h1>
-		{{ if .Image }}
-		<img src="{{.FileURL}}" />
-		{{ else }}
-		<embed src="{{ .FileURL }}" />
-		{{ end }}
+		<div style="min-height: 95vh; padding: 0 0.5rem; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+			<h1 style="font-family: Arial, Helvetica, sans-serif; color: white; font-size: 20px; font-weight: 400">File uploaded by {{.Uploader}} on {{.Date}}.</h1>
+			{{ if .Image }}
+			<img width="500px" style="padding: 10px" src="{{.FileURL}}" />
+			{{ else }}
+			<embed src="{{ .FileURL }}" />
+			{{ end }}
+		</div>
 	</html>`
 
-	showLinkTemplate = `<html>
+	showLinkTemplate = `<html style="background: #181818;">
 		<head>
 			<meta property="og:image" content="{{.FileURL}}" />
 			<meta name="twitter:card" content="summary_large_image" />
 		</head>
 
-		<h1>Image uploaded by {{.Uploader}} on {{.Date}}.</h1>
-		<img src="{{.FileURL}}" />
+		<div style="min-height: 95vh; padding: 0 0.5rem; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+			<h1 style="font-family: Arial, Helvetica, sans-serif; color: white; font-size: 20px; font-weight: 400">File uploaded by {{.Uploader}} on {{.Date}}.</h1>
+			<img width="500px" style="padding: 10px" src="{{.FileURL}}" />
+		</div>
 	</html>`
 )
 
