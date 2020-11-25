@@ -125,6 +125,11 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		uploaderUsername := file["uploader"].(primitive.M)["username"].(string)
 		dateUploaded := file["dateUploaded"].(string)
 
+		fileSize := ""
+		if file["size"] != nil {
+			fileSize = file["size"].(string)
+		}
+
 		author := ""
 		if file["embed"].(primitive.M)["author"] == true {
 			author = uploaderUsername
@@ -135,6 +140,7 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 			title = strings.ReplaceAll(embedTitle, "{username}", uploaderUsername)
 			title = strings.ReplaceAll(title, "{date}", dateUploaded)
 			title = strings.ReplaceAll(title, "{file}", file["filename"].(string))
+			title = strings.ReplaceAll(title, "{size}", fileSize)
 		}
 
 		ctx.Response.Header.SetCanonical([]byte("Content-Type"), []byte("application/json"))
@@ -193,11 +199,17 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 			embedDescription := file["embed"].(primitive.M)["description"].(string)
 			dateUploaded := file["dateUploaded"].(string)
 
+			fileSize := ""
+			if file["size"] != nil {
+				fileSize = file["size"].(string)
+			}
+
 			description := "Uploaded by " + uploaderUsername + " on " + dateUploaded
 			if file["embed"].(primitive.M)["description"] != "default" {
 				description = strings.ReplaceAll(embedDescription, "{username}", uploaderUsername)
 				description = strings.ReplaceAll(description, "{date}", dateUploaded)
 				description = strings.ReplaceAll(description, "{file}", file["filename"].(string))
+				description = strings.ReplaceAll(description, "{size}", fileSize)
 			}
 			color := file["embed"].(primitive.M)["color"].(string)
 			if file["embed"].(primitive.M)["randomColor"] == true {
