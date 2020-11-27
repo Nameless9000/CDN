@@ -124,10 +124,16 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		embedTitle := file["embed"].(primitive.M)["title"].(string)
 		uploaderUsername := file["uploader"].(primitive.M)["username"].(string)
 		dateUploaded := file["dateUploaded"].(string)
+		fileName := file["filename"].(string)
 
 		fileSize := ""
 		if file["size"] != nil {
 			fileSize = file["size"].(string)
+		}
+
+		domain := ""
+		if file["domain"] != nil {
+			domain = file["domain"].(string)
 		}
 
 		author := ""
@@ -139,8 +145,9 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		if file["embed"].(primitive.M)["title"] != "default" {
 			title = strings.ReplaceAll(embedTitle, "{username}", uploaderUsername)
 			title = strings.ReplaceAll(title, "{date}", dateUploaded)
-			title = strings.ReplaceAll(title, "{file}", file["filename"].(string))
+			title = strings.ReplaceAll(title, "{file}", fileName)
 			title = strings.ReplaceAll(title, "{size}", fileSize)
+			title = strings.ReplaceAll(title, "{domain}", domain)
 		}
 
 		ctx.Response.Header.SetCanonical([]byte("Content-Type"), []byte("application/json"))
@@ -198,18 +205,25 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 
 			embedDescription := file["embed"].(primitive.M)["description"].(string)
 			dateUploaded := file["dateUploaded"].(string)
+			fileName := file["filename"].(string)
 
 			fileSize := ""
 			if file["size"] != nil {
 				fileSize = file["size"].(string)
 			}
 
+			domain := ""
+			if file["domain"] != nil {
+				domain = file["domain"].(string)
+			}
+
 			description := "Uploaded by " + uploaderUsername + " on " + dateUploaded
 			if file["embed"].(primitive.M)["description"] != "default" {
 				description = strings.ReplaceAll(embedDescription, "{username}", uploaderUsername)
 				description = strings.ReplaceAll(description, "{date}", dateUploaded)
-				description = strings.ReplaceAll(description, "{file}", file["filename"].(string))
+				description = strings.ReplaceAll(description, "{file}", fileName)
 				description = strings.ReplaceAll(description, "{size}", fileSize)
+				description = strings.ReplaceAll(description, "{domain}", domain)
 			}
 			color := file["embed"].(primitive.M)["color"].(string)
 			if file["embed"].(primitive.M)["randomColor"] == true {
