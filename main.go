@@ -36,6 +36,7 @@ type Response struct {
 }
 
 var (
+	shortenerCol *mongo.Collection
 	collection   *mongo.Collection
 	invisibleURL *mongo.Collection
 	mongoContext = context.TODO()
@@ -123,6 +124,21 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		}); err != nil {
 			log.Fatal(err)
 		}
+	case strings.HasPrefix(requestPath, "/s/") && basePath != "s":
+		var shortened bson.M
+		if err := shortenerCol.FindOne(mongoContext, bson.M{"shortId": basePath}).Decode(&shortened); err != nil {
+			sendErr(ctx, "invalid short link")
+			ctx.Done()
+			return
+		}
+
+		destination := shortened["destination"].(string)
+		if !strings.HasPrefix(destination, "http") {
+			destination = "https://" + shortened["destination"].(string)
+		}
+
+		ctx.Redirect(destination, 301)
+		ctx.Done()
 	case basePath != "" && basePath != "favicon.ico":
 		var file bson.M
 		if strings.HasSuffix(basePath, "\u200B") {
@@ -265,6 +281,7 @@ func connectToDatabase(mongoURL string) {
 
 	database := client.Database("backend-rewrite")
 	collection = database.Collection("files")
+	shortenerCol = database.Collection("shorteners")
 	invisibleURL = database.Collection("invisibleurls")
 
 	defer fmt.Println("Connected to MongoDB cluster")
