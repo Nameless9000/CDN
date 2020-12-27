@@ -43,7 +43,7 @@ var (
 )
 
 const (
-	embedTemplate = `<html style="background: #181818;">
+	embedTemplate = `<html>
 		<head>
 			{{ if .Image }}
 			<meta name="twitter:card" content="summary_large_image" />
@@ -63,6 +63,17 @@ const (
 			{{ else }}
 			<embed style="-webkit-user-select: none;margin: auto;" src="{{ .FileURL }}" />
 			{{ end }}
+		</body>
+	</html>`
+
+	showLinkTemplate = `<html>
+		<head>
+			<meta name="twitter:card" content="summary_large_image" />
+			<meta property="og:image" content="{{.FileURL}}" />
+		</head>
+
+		<body style="margin: 0px; background: #0e0e0e; height: 100%; display: flex; align-items: center">
+			<img width="500px" style="-webkit-user-select: none;margin: auto;" src="{{.FileURL}}" />
 		</body>
 	</html>`
 )
@@ -87,6 +98,7 @@ func main() {
 func requestHandler(ctx *fasthttp.RequestCtx) {
 	requestPath := string(ctx.Path())
 	basePath := path.Base(requestPath)
+	host := string(ctx.Host())
 
 	switch {
 	case requestPath == "/":
@@ -111,19 +123,33 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		}); err != nil {
 			log.Fatal(err)
 		}
-	case strings.HasSuffix(basePath, "\u200B"):
+	case basePath != "" && basePath != "favicon.ico":
 		var file bson.M
-		if err := invisibleURL.FindOne(mongoContext, bson.M{"_id": basePath}).Decode(&file); err != nil {
-			sendErr(ctx, "no invisible url or file was found")
-			ctx.Done()
-			return
-		}
-		if file != nil {
-			if err := collection.FindOne(mongoContext, bson.M{"filename": file["filename"]}).Decode(&file); err != nil {
+		if strings.HasSuffix(basePath, "\u200B") {
+			if err := invisibleURL.FindOne(mongoContext, bson.M{"_id": basePath}).Decode(&file); err != nil {
+				sendErr(ctx, "no invisible url or file was found")
+				ctx.Done()
+				return
+			}
+			if file != nil {
+				if err := collection.FindOne(mongoContext, bson.M{"filename": file["filename"]}).Decode(&file); err != nil {
+					sendErr(ctx, "invalid file")
+					ctx.Done()
+					return
+				}
+			}
+		} else {
+			if err := collection.FindOne(mongoContext, bson.M{"filename": basePath}).Decode(&file); err != nil {
 				sendErr(ctx, "invalid file")
 				ctx.Done()
 				return
 			}
+		}
+
+		if file["userOnlyDomain"] == true && host != file["domain"].(string) {
+			sendErr(ctx, "invalid file")
+			ctx.Done()
+			return
 		}
 
 		resp, err := svc.GetObject(&s3.GetObjectInput{
@@ -160,8 +186,6 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 				OEmbedURL string
 				Desc      string
 				Color     string
-				Uploader  string
-				Date      string
 				Image     bool
 			}{
 				FileURL:   cdnURL,
@@ -176,6 +200,32 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 			if err != nil {
 				sendErr(ctx, err.Error())
 				ctx.Done()
+			}
+		} else if file["showLink"] == true {
+			if mimetype == "video" {
+				ctx.SetContentType(deref(resp.ContentType))
+				ctx.SetBody(body)
+				ctx.Done()
+			} else {
+				t, err := template.New("showLink").Parse(showLinkTemplate)
+				if err != nil {
+					sendErr(ctx, err.Error())
+					ctx.Done()
+					return
+				}
+
+				data := struct {
+					FileURL string
+				}{
+					FileURL: cdnURL,
+				}
+
+				ctx.SetContentType("text/html")
+				err = t.Execute(ctx, data)
+				if err != nil {
+					sendErr(ctx, err.Error())
+					ctx.Done()
+				}
 			}
 		} else {
 			ctx.SetContentType(deref(resp.ContentType))
