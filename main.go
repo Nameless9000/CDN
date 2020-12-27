@@ -7,31 +7,21 @@ import (
 	"html/template"
 	"io/ioutil"
 	"log"
-	"math/rand"
 	"os"
+	"path"
 	"strings"
-	"time"
-
-	"go.mongodb.org/mongo-driver/bson/primitive"
-
-	"github.com/aws/aws-sdk-go/service/s3"
-
-	"github.com/aws/aws-sdk-go/aws"
-
-	"github.com/aws/aws-sdk-go/aws/session"
 
 	"github.com/valyala/fasthttp"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-
-	"github.com/joho/godotenv"
 )
-
-type Response struct {
-	Success bool
-	Error   string
-}
 
 type OEmbedResponse struct {
 	Version string `json:"version"`
@@ -40,7 +30,13 @@ type OEmbedResponse struct {
 	Author  string `json:"author_name"`
 }
 
+type Response struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error"`
+}
+
 var (
+	shortenerCol *mongo.Collection
 	collection   *mongo.Collection
 	invisibleURL *mongo.Collection
 	mongoContext = context.TODO()
@@ -48,7 +44,7 @@ var (
 )
 
 const (
-	embedTemplate = `<html style="background: #181818;">
+	embedTemplate = `<html>
 		<head>
 			{{ if .Image }}
 			<meta name="twitter:card" content="summary_large_image" />
@@ -56,32 +52,30 @@ const (
 			<meta property="og:description" content="{{.Desc}}" />
 			{{ else }}
 			<meta name="twitter:card" content="player" />
-			<meta name="twitter:player" content="{{ .FileURL }}">
+			<meta name="twitter:player" content="{{.FileURL}}">
 			{{ end }}
 			<meta name="theme-color" content="{{.Color}}" />
 			<link type="application/json+oembed" href="{{.OEmbedURL}}" />
 		</head>
 
-		<div style="min-height: 95vh; padding: 0 0.5rem; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
-			<h1 style="font-family: Arial, Helvetica, sans-serif; color: white; font-size: 20px; font-weight: 400">File uploaded by {{.Uploader}} on {{.Date}}.</h1>
+		<body style="margin: 0px; background: #0e0e0e; height: 100%; display: flex; align-items: center">
 			{{ if .Image }}
-			<img width="500px" style="padding: 10px" src="{{.FileURL}}" />
+			<img width="500px" style="-webkit-user-select: none;margin: auto;" src="{{.FileURL}}" />
 			{{ else }}
-			<embed src="{{ .FileURL }}" />
+			<embed style="-webkit-user-select: none;margin: auto;" src="{{ .FileURL }}" />
 			{{ end }}
-		</div>
+		</body>
 	</html>`
 
-	showLinkTemplate = `<html style="background: #181818;">
+	showLinkTemplate = `<html>
 		<head>
-			<meta property="og:image" content="{{.FileURL}}" />
 			<meta name="twitter:card" content="summary_large_image" />
+			<meta property="og:image" content="{{.FileURL}}" />
 		</head>
 
-		<div style="min-height: 95vh; padding: 0 0.5rem; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
-			<h1 style="font-family: Arial, Helvetica, sans-serif; color: white; font-size: 20px; font-weight: 400">File uploaded by {{.Uploader}} on {{.Date}}.</h1>
-			<img width="500px" style="padding: 10px" src="{{.FileURL}}" />
-		</div>
+		<body style="margin: 0px; background: #0e0e0e; height: 100%; display: flex; align-items: center">
+			<img width="500px" style="-webkit-user-select: none;margin: auto;" src="{{.FileURL}}" />
+		</body>
 	</html>`
 )
 
@@ -91,100 +85,92 @@ func main() {
 		log.Fatal(err)
 	}
 
-	port := os.Getenv("PORT")
-	mongoURL := os.Getenv("MONGO_URI")
-
-	connectToDatabase(mongoURL)
-	connectToS3()
+	connectToS3(os.Getenv("S3_ENDPOINT"))
+	connectToDatabase(os.Getenv("MONGO_URI"))
 
 	handler := fasthttp.CompressHandler(requestHandler)
-
-	if err := fasthttp.ListenAndServe(":"+port, handler); err != nil {
+	if err := fasthttp.ListenAndServe(":"+os.Getenv("PORT"), handler); err != nil {
 		log.Fatal(err)
 	}
 
-	log.Printf("Listening to port %s", port)
+	defer log.Printf("Listening to port %s", os.Getenv("PORT"))
 }
 
 func requestHandler(ctx *fasthttp.RequestCtx) {
-	path := string(ctx.Path())
+	requestPath := string(ctx.Path())
+	basePath := path.Base(requestPath)
+	host := string(ctx.Host())
 
 	switch {
-	case path == "/":
+	case requestPath == "/":
 		ctx.Redirect("https://astral.cool", 301)
-	case strings.HasPrefix(path, "/oembed/"):
-		path = strings.SplitN(path[1:], "/", 2)[1]
+	case strings.HasSuffix(basePath, ".json"):
+		requestPath = strings.SplitN(basePath, ".json", 2)[0]
 		var file bson.M
-		if err := collection.FindOne(mongoContext, bson.M{"filename": path}).Decode(&file); err != nil {
+		if err := collection.FindOne(mongoContext, bson.M{"filename": requestPath}).Decode(&file); err != nil {
 			sendErr(ctx, "invalid file")
 			ctx.Done()
 			return
 		}
 
-		embedTitle := file["embed"].(primitive.M)["title"].(string)
-		uploaderUsername := file["uploader"].(primitive.M)["username"].(string)
-		dateUploaded := file["dateUploaded"].(string)
-		fileName := file["filename"].(string)
-
-		fileSize := ""
-		if file["size"] != nil {
-			fileSize = file["size"].(string)
-		}
-
-		domain := ""
-		if file["domain"] != nil {
-			domain = file["domain"].(string)
-		}
-
-		author := ""
-		if file["embed"].(primitive.M)["author"] == true {
-			author = uploaderUsername
-		}
-
-		title := file["filename"].(string)
-		if file["embed"].(primitive.M)["title"] != "default" {
-			title = strings.ReplaceAll(embedTitle, "{username}", uploaderUsername)
-			title = strings.ReplaceAll(title, "{date}", dateUploaded)
-			title = strings.ReplaceAll(title, "{file}", fileName)
-			title = strings.ReplaceAll(title, "{size}", fileSize)
-			title = strings.ReplaceAll(title, "{domain}", domain)
-		}
+		embed := file["embed"].(primitive.M)
 
 		ctx.Response.Header.SetCanonical([]byte("Content-Type"), []byte("application/json"))
 		if err := json.NewEncoder(ctx).Encode(OEmbedResponse{
 			Type:    "link",
 			Version: "1.0",
-			Title:   title,
-			Author:  author,
+			Title:   embed["title"].(string),
+			Author:  embed["author"].(string),
 		}); err != nil {
 			log.Fatal(err)
 		}
-	case path != "/" && path != "favicon.ico":
-		path = path[1:]
+	case strings.HasPrefix(requestPath, "/s/") && basePath != "s":
+		var shortened bson.M
+		if err := shortenerCol.FindOne(mongoContext, bson.M{"shortId": basePath}).Decode(&shortened); err != nil {
+			sendErr(ctx, "invalid short link")
+			ctx.Done()
+			return
+		}
+
+		destination := shortened["destination"].(string)
+		if !strings.HasPrefix(destination, "http") {
+			destination = "https://" + shortened["destination"].(string)
+		}
+
+		ctx.Redirect(destination, 301)
+		ctx.Done()
+	case basePath != "" && basePath != "favicon.ico":
 		var file bson.M
-		var invisURL bson.M
-		if err := invisibleURL.FindOne(mongoContext, bson.M{"_id": path}).Decode(&invisURL); err != nil {
-			if err := collection.FindOne(mongoContext, bson.M{"filename": path}).Decode(&file); err != nil {
+		if strings.HasSuffix(basePath, "\u200B") {
+			if err := invisibleURL.FindOne(mongoContext, bson.M{"_id": basePath}).Decode(&file); err != nil {
 				sendErr(ctx, "no invisible url or file was found")
 				ctx.Done()
 				return
 			}
-		}
-		if invisURL != nil {
-			if err := collection.FindOne(mongoContext, bson.M{"filename": invisURL["filename"]}).Decode(&file); err != nil {
+			if file != nil {
+				if err := collection.FindOne(mongoContext, bson.M{"filename": file["filename"]}).Decode(&file); err != nil {
+					sendErr(ctx, "invalid file")
+					ctx.Done()
+					return
+				}
+			}
+		} else {
+			if err := collection.FindOne(mongoContext, bson.M{"filename": basePath}).Decode(&file); err != nil {
 				sendErr(ctx, "invalid file")
 				ctx.Done()
 				return
 			}
 		}
 
-		mimetype := strings.SplitN(file["mimetype"].(string), "/", 2)[0]
+		if file["userOnlyDomain"] == true && host != file["domain"].(string) {
+			sendErr(ctx, "invalid file")
+			ctx.Done()
+			return
+		}
 
-		uploaderID := file["uploader"].(primitive.M)["uid"].(string)
-		uploaderUsername := file["uploader"].(primitive.M)["username"].(string)
 		resp, err := svc.GetObject(&s3.GetObjectInput{
 			Bucket: aws.String(os.Getenv("S3_BUCKET_NAME")),
-			Key:    aws.String(uploaderID + "/" + file["filename"].(string)),
+			Key:    aws.String(file["key"].(string)),
 		})
 		if err != nil {
 			sendErr(ctx, err.Error())
@@ -194,45 +180,19 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			sendErr(ctx, "something went wrong")
+			sendErr(ctx, err.Error())
 			ctx.Done()
 			return
 		}
 
-		fileURL := "https://cdn.astral.cool/" + uploaderID + "/" + file["filename"].(string)
-		if file["displayType"] == "embed" {
-			ctx.SetContentType("text/html")
+		mimetype := strings.SplitN(file["mimetype"].(string), "/", 2)[0]
+		cdnURL := "https://cdn.astral.cool" + "/" + file["key"].(string)
+		embed := file["embed"].(primitive.M)
 
-			embedDescription := file["embed"].(primitive.M)["description"].(string)
-			dateUploaded := file["dateUploaded"].(string)
-			fileName := file["filename"].(string)
-
-			fileSize := ""
-			if file["size"] != nil {
-				fileSize = file["size"].(string)
-			}
-
-			domain := ""
-			if file["domain"] != nil {
-				domain = file["domain"].(string)
-			}
-
-			description := "Uploaded by " + uploaderUsername + " on " + dateUploaded
-			if file["embed"].(primitive.M)["description"] != "default" {
-				description = strings.ReplaceAll(embedDescription, "{username}", uploaderUsername)
-				description = strings.ReplaceAll(description, "{date}", dateUploaded)
-				description = strings.ReplaceAll(description, "{file}", fileName)
-				description = strings.ReplaceAll(description, "{size}", fileSize)
-				description = strings.ReplaceAll(description, "{domain}", domain)
-			}
-			color := file["embed"].(primitive.M)["color"].(string)
-			if file["embed"].(primitive.M)["randomColor"] == true {
-				color = generateColor()
-			}
-
+		if embed["enabled"] == true {
 			t, err := template.New("embed").Parse(embedTemplate)
 			if err != nil {
-				sendErr(ctx, "something went wrong")
+				sendErr(ctx, err.Error())
 				ctx.Done()
 				return
 			}
@@ -242,22 +202,19 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 				OEmbedURL string
 				Desc      string
 				Color     string
-				Uploader  string
-				Date      string
 				Image     bool
 			}{
-				FileURL:   fileURL,
-				OEmbedURL: os.Getenv("CDN_URL") + "/oembed/" + file["filename"].(string),
-				Desc:      description,
-				Color:     color,
-				Uploader:  uploaderUsername,
-				Date:      dateUploaded,
+				FileURL:   cdnURL,
+				OEmbedURL: os.Getenv("CDN_URL") + "/" + file["filename"].(string) + ".json",
+				Desc:      embed["description"].(string),
+				Color:     embed["color"].(string),
 				Image:     mimetype == "image",
 			}
 
+			ctx.SetContentType("text/html")
 			err = t.Execute(ctx, data)
 			if err != nil {
-				sendErr(ctx, "something went wrong")
+				sendErr(ctx, err.Error())
 				ctx.Done()
 			}
 		} else if file["showLink"] == true {
@@ -265,36 +222,26 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 				ctx.SetContentType(deref(resp.ContentType))
 				ctx.SetBody(body)
 				ctx.Done()
-			} else if mimetype == "image" {
-				ctx.SetContentType("text/html")
-
-				dateUploaded := file["dateUploaded"].(string)
-
-				t, err := template.New("showlink").Parse(showLinkTemplate)
+			} else {
+				t, err := template.New("showLink").Parse(showLinkTemplate)
 				if err != nil {
-					sendErr(ctx, "something went wrong")
+					sendErr(ctx, err.Error())
 					ctx.Done()
 					return
 				}
 
 				data := struct {
-					FileURL  string
-					Uploader string
-					Date     string
+					FileURL string
 				}{
-					FileURL:  fileURL,
-					Uploader: uploaderUsername,
-					Date:     dateUploaded,
+					FileURL: cdnURL,
 				}
 
+				ctx.SetContentType("text/html")
 				err = t.Execute(ctx, data)
 				if err != nil {
-					sendErr(ctx, "something went wrong")
+					sendErr(ctx, err.Error())
 					ctx.Done()
 				}
-			} else {
-				sendErr(ctx, "invalid mimetype")
-				ctx.Done()
 			}
 		} else {
 			ctx.SetContentType(deref(resp.ContentType))
@@ -311,7 +258,7 @@ func sendErr(ctx *fasthttp.RequestCtx, errMsg string) {
 	}
 }
 
-func connectToS3() {
+func connectToS3(endpoint string) {
 	sess, err := session.NewSession(&aws.Config{
 		Region: aws.String("us-west-2"),
 	})
@@ -320,8 +267,10 @@ func connectToS3() {
 	}
 
 	svc = s3.New(sess, &aws.Config{
-		Endpoint: aws.String(os.Getenv("S3_ENDPOINT")),
+		Endpoint: aws.String(endpoint),
 	})
+
+	defer fmt.Println("Connected to S3")
 }
 
 func connectToDatabase(mongoURL string) {
@@ -329,10 +278,13 @@ func connectToDatabase(mongoURL string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	collection = client.Database("astral").Collection("files")
-	invisibleURL = client.Database("astral").Collection("invisibleurls")
 
-	defer fmt.Println("connected to database")
+	database := client.Database("backend-rewrite")
+	collection = database.Collection("files")
+	shortenerCol = database.Collection("shorteners")
+	invisibleURL = database.Collection("invisibleurls")
+
+	defer fmt.Println("Connected to MongoDB cluster")
 }
 
 func deref(str *string) string {
@@ -341,12 +293,4 @@ func deref(str *string) string {
 	}
 
 	return ""
-}
-
-func generateColor() string {
-	rand.Seed(time.Now().UnixNano())
-	Blue := rand.Intn(255)
-	Green := rand.Intn(255)
-	Red := rand.Intn(255)
-	return "#" + fmt.Sprintf("%x", Red) + fmt.Sprintf("%x", Green) + fmt.Sprintf("%x", Blue)
 }
