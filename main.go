@@ -205,7 +205,7 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 				Image     bool
 			}{
 				FileURL:   cdnURL,
-				OEmbedURL: os.Getenv("CDN_URL") + "/" + file["filename"].(string) + ".json",
+				OEmbedURL: "https://" + host + "/" + file["filename"].(string) + ".json",
 				Desc:      embed["description"].(string),
 				Color:     embed["color"].(string),
 				Image:     mimetype == "image",
