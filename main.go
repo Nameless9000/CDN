@@ -114,6 +114,8 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		}
 
 		embed := file["embed"].(primitive.M)
+		embed["title"] = strings.ReplaceAll(embed["title"].(string), "{domain}", host)
+		embed["author"] = strings.ReplaceAll(embed["author"].(string), "{domain}", host)
 
 		ctx.Response.Header.SetCanonical([]byte("Content-Type"), []byte("application/json"))
 		if err := json.NewEncoder(ctx).Encode(OEmbedResponse{
@@ -188,6 +190,8 @@ func requestHandler(ctx *fasthttp.RequestCtx) {
 		mimetype := strings.SplitN(file["mimetype"].(string), "/", 2)[0]
 		cdnURL := "https://cdn.astral.cool" + "/" + file["key"].(string)
 		embed := file["embed"].(primitive.M)
+
+		embed["description"] = strings.ReplaceAll(embed["description"].(string), "{domain}", host)
 
 		if embed["enabled"] == true {
 			t, err := template.New("embed").Parse(embedTemplate)
@@ -279,7 +283,7 @@ func connectToDatabase(mongoURL string) {
 		log.Fatal(err)
 	}
 
-	database := client.Database("backend-rewrite")
+	database := client.Database("astral")
 	collection = database.Collection("files")
 	shortenerCol = database.Collection("shorteners")
 	invisibleURL = database.Collection("invisibleurls")
